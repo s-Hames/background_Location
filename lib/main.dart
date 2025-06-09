@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -115,7 +117,11 @@ Future<void> initializeService() async {
   if (Platform.isIOS || Platform.isAndroid) {
     await flutterLocalNotificationsPlugin.initialize(
       const InitializationSettings(
-        iOS: DarwinInitializationSettings(),
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        ),
         android: AndroidInitializationSettings('ic_bg_service_small'),
       ),
     );
@@ -133,7 +139,7 @@ Future<void> initializeService() async {
       autoStart: true,
       isForegroundMode: true,
       notificationChannelId: 'api_service_channel',
-      initialNotificationTitle: 'API Service',
+      initialNotificationTitle: 'Location Service',
       initialNotificationContent: 'Initializing',
       foregroundServiceNotificationId: 888,
     ),
@@ -144,7 +150,6 @@ Future<void> initializeService() async {
     ),
   );
 
-  // Start the service immediately after configuration
   await service.startService();
 }
 
@@ -153,13 +158,28 @@ Future<bool> onIosBackground(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
 
-  SharedPreferences preferences = await SharedPreferences.getInstance();
-  await preferences.reload();
-  final log = preferences.getStringList('log') ?? <String>[];
-  log.add(DateTime.now().toIso8601String());
-  await preferences.setStringList('log', log);
+  try {
+    SharedPreferences preferences = await SharedPreferences.getInstance();
+    await preferences.reload();
+    final log = preferences.getStringList('log') ?? <String>[];
+    log.add(
+      '${DateTime.now().toIso8601String()} - iOS Background Task Started',
+    );
+    await preferences.setStringList('log', log);
 
-  return true;
+    // Get location and send to API
+    await sendLocationToApi();
+
+    return true;
+  } catch (e) {
+    SharedPreferences preferences = await SharedPreferences.getInstance();
+    final log = preferences.getStringList('log') ?? <String>[];
+    log.add(
+      '${DateTime.now().toIso8601String()} - Error in iOS background: $e',
+    );
+    await preferences.setStringList('log', log);
+    return false;
+  }
 }
 
 @pragma('vm:entry-point')
@@ -172,59 +192,40 @@ void onStart(ServiceInstance service) async {
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
+  // Always set as foreground service
   if (service is AndroidServiceInstance) {
-    service.on('setAsForeground').listen((event) {
-      service.setAsForegroundService();
-    });
-
-    service.on('setAsBackground').listen((event) {
-      service.setAsBackgroundService();
-    });
+    service.setAsForegroundService();
   }
 
   service.on('stopService').listen((event) {
     service.stopSelf();
   });
 
-  // API call timer
+  // Location update timer
   Timer.periodic(const Duration(seconds: 6), (timer) async {
     try {
-      final response = await http.get(
-        Uri.parse('https://fast-jwt-newuage.vercel.app'),
-      );
-
-      String responseText =
-          response.statusCode == 200
-              ? 'Response: ${response.body}'
-              : 'Error: ${response.statusCode}';
+      final responseText = await sendLocationToApi();
 
       if (service is AndroidServiceInstance) {
-        if (await service.isForegroundService()) {
-          flutterLocalNotificationsPlugin.show(
-            888,
-            'API Service',
-            responseText,
-            const NotificationDetails(
-              android: AndroidNotificationDetails(
-                'api_service_channel',
-                'API Service',
-                icon: 'ic_bg_service_small',
-                ongoing: true,
-              ),
+        flutterLocalNotificationsPlugin.show(
+          888,
+          'Location Service',
+          responseText,
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'api_service_channel',
+              'Location Service',
+              icon: 'ic_bg_service_small',
+              ongoing: true,
             ),
-          );
+          ),
+        );
 
-          service.setForegroundNotificationInfo(
-            title: "API Service",
-            content: responseText,
-          );
-        }
+        service.setForegroundNotificationInfo(
+          title: "Location Service",
+          content: responseText,
+        );
       }
-
-      // Log the response
-      final log = preferences.getStringList('log') ?? <String>[];
-      log.add('${DateTime.now().toIso8601String()} - $responseText');
-      await preferences.setStringList('log', log);
 
       // Update UI
       service.invoke('update', {
@@ -234,21 +235,19 @@ void onStart(ServiceInstance service) async {
     } catch (e) {
       String errorText = 'Error: $e';
       if (service is AndroidServiceInstance) {
-        if (await service.isForegroundService()) {
-          flutterLocalNotificationsPlugin.show(
-            888,
-            'API Service',
-            errorText,
-            const NotificationDetails(
-              android: AndroidNotificationDetails(
-                'api_service_channel',
-                'API Service',
-                icon: 'ic_bg_service_small',
-                ongoing: true,
-              ),
+        flutterLocalNotificationsPlugin.show(
+          888,
+          'Location Service',
+          errorText,
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'api_service_channel',
+              'Location Service',
+              icon: 'ic_bg_service_small',
+              ongoing: true,
             ),
-          );
-        }
+          ),
+        );
       }
 
       // Log the error
@@ -257,6 +256,44 @@ void onStart(ServiceInstance service) async {
       await preferences.setStringList('log', log);
     }
   });
+}
+
+Future<String> sendLocationToApi() async {
+  try {
+    // Get current position
+    Position position = await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+
+    // Prepare the request body
+    final Map<String, dynamic> body = {
+      'latitude': position.latitude,
+      'longitude': position.longitude,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+
+    // Send to API
+    final response = await http.post(
+      Uri.parse('http://192.168.29.21:8000/location'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+
+    String responseText =
+        response.statusCode == 200
+            ? 'Location sent successfully: ${response.body}'
+            : 'Error: ${response.statusCode}';
+
+    // Log the response
+    SharedPreferences preferences = await SharedPreferences.getInstance();
+    final log = preferences.getStringList('log') ?? <String>[];
+    log.add('${DateTime.now().toIso8601String()} - $responseText');
+    await preferences.setStringList('log', log);
+
+    return responseText;
+  } catch (e) {
+    throw Exception('Failed to send location: $e');
+  }
 }
 
 // Add a global navigator key
@@ -275,7 +312,6 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
-    // Request permissions after the widget is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
       checkAndRequestPermissions(context);
     });
@@ -286,7 +322,7 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       navigatorKey: navigatorKey, // Add the navigator key here
       home: Scaffold(
-        appBar: AppBar(title: const Text('API Service')),
+        appBar: AppBar(title: const Text('Location Service')),
         body: Column(
           children: [
             StreamBuilder<Map<String, dynamic>?>(
@@ -308,16 +344,6 @@ class _MyAppState extends State<MyApp> {
               },
             ),
             ElevatedButton(
-              child: const Text("Foreground Mode"),
-              onPressed:
-                  () => FlutterBackgroundService().invoke("setAsForeground"),
-            ),
-            ElevatedButton(
-              child: const Text("Background Mode"),
-              onPressed:
-                  () => FlutterBackgroundService().invoke("setAsBackground"),
-            ),
-            ElevatedButton(
               child: Text(text),
               onPressed: () async {
                 final service = FlutterBackgroundService();
@@ -330,10 +356,6 @@ class _MyAppState extends State<MyApp> {
                   text = isRunning ? 'Start Service' : 'Stop Service';
                 });
               },
-            ),
-            ElevatedButton(
-              child: const Text("Request Permissions"),
-              onPressed: () => checkAndRequestPermissions(context),
             ),
             const Expanded(child: LogView()),
           ],
