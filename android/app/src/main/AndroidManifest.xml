@@ -53,14 +53,16 @@
 
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="location|dataSync"
             android:exported="false"
+            android:enabled="true"
             tools:replace="android:exported"/>
 
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService$NotificationService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="location|dataSync"
             android:exported="false"
+            android:enabled="true"
             tools:replace="android:exported"/>
     </application>
     <!-- Required to query activities that can process text, see:

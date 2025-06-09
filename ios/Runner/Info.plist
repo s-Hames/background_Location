@@ -88,6 +88,12 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+    <string>dev.flutter.background.refresh</string>
+	</array>
+
 	
 	<!-- User Tracking permission -->
 	<key>NSUserTrackingUsageDescription</key>

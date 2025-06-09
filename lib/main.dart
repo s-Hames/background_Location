@@ -7,6 +7,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,14 +15,98 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+Future<void> checkAndRequestPermissions(BuildContext context) async {
+  if (Platform.isAndroid) {
+    // Check and request location permissions
+    final locationStatus = await Permission.location.status;
+    if (!locationStatus.isGranted) {
+      final result = await Permission.location.request();
+      if (result.isDenied) {
+        if (context.mounted) {
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('Location Permission Required'),
+                  content: const Text(
+                    'This app needs location permission to work properly. Please enable it in app settings.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await openAppSettings();
+                      },
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+          );
+        }
+      }
+    }
+
+    // Check and request notification permission
+    final notificationStatus = await Permission.notification.status;
+    if (!notificationStatus.isGranted) {
+      final result = await Permission.notification.request();
+      if (result.isDenied) {
+        if (context.mounted) {
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('Notification Permission Required'),
+                  content: const Text(
+                    'This app needs notification permission to show background service status. Please enable it in app settings.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await openAppSettings();
+                      },
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+          );
+        }
+      }
+    }
+
+    // Request battery optimization permission
+    await Permission.ignoreBatteryOptimizations.request();
+  }
+}
+
 Future<void> initializeService() async {
+  // Check if all required permissions are granted
+  if (Platform.isAndroid) {
+    final locationStatus = await Permission.location.status;
+
+    if (!locationStatus.isGranted) {
+      print('Location permission not granted. Please grant all permissions.');
+      return;
+    }
+  }
+
   final service = FlutterBackgroundService();
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'api_service_channel',
     'API Service',
     description: 'This channel is used for API service notifications',
-    importance: Importance.low,
+    importance: Importance.high,
+    enableVibration: true,
   );
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -58,6 +143,9 @@ Future<void> initializeService() async {
       onBackground: onIosBackground,
     ),
   );
+
+  // Start the service immediately after configuration
+  await service.startService();
 }
 
 @pragma('vm:entry-point')
@@ -171,6 +259,9 @@ void onStart(ServiceInstance service) async {
   });
 }
 
+// Add a global navigator key
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class MyApp extends StatefulWidget {
   const MyApp({Key? key}) : super(key: key);
 
@@ -180,9 +271,20 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   String text = "Stop Service";
+
+  @override
+  void initState() {
+    super.initState();
+    // Request permissions after the widget is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      checkAndRequestPermissions(context);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey, // Add the navigator key here
       home: Scaffold(
         appBar: AppBar(title: const Text('API Service')),
         body: Column(
@@ -228,6 +330,10 @@ class _MyAppState extends State<MyApp> {
                   text = isRunning ? 'Start Service' : 'Stop Service';
                 });
               },
+            ),
+            ElevatedButton(
+              child: const Text("Request Permissions"),
+              onPressed: () => checkAndRequestPermissions(context),
             ),
             const Expanded(child: LogView()),
           ],
