@@ -87,6 +87,106 @@ Future<void> checkAndRequestPermissions(BuildContext context) async {
 
     // Request battery optimization permission
     await Permission.ignoreBatteryOptimizations.request();
+  } else if (Platform.isIOS) {
+    // Request location permissions for iOS
+    // First request when in use permission
+    final locationWhenInUseStatus = await Permission.locationWhenInUse.status;
+    if (!locationWhenInUseStatus.isGranted) {
+      final result = await Permission.locationWhenInUse.request();
+      if (result.isDenied) {
+        if (context.mounted) {
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('Location Permission Required'),
+                  content: const Text(
+                    'This app needs location permission to work properly. Please enable it in Settings > Privacy > Location Services.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await openAppSettings();
+                      },
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+          );
+        }
+      }
+    }
+
+    // Then request always permission
+    final locationAlwaysStatus = await Permission.locationAlways.status;
+    if (!locationAlwaysStatus.isGranted) {
+      final result = await Permission.locationAlways.request();
+      if (result.isDenied) {
+        if (context.mounted) {
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('Background Location Permission Required'),
+                  content: const Text(
+                    'This app needs background location permission to track your location when the app is not active. Please enable it in Settings > Privacy > Location Services > [App Name] > Always.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await openAppSettings();
+                      },
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+          );
+        }
+      }
+    }
+
+    // Request notification permission for iOS
+    final notificationStatus = await Permission.notification.status;
+    if (!notificationStatus.isGranted) {
+      final result = await Permission.notification.request();
+      if (result.isDenied) {
+        if (context.mounted) {
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  title: const Text('Notification Permission Required'),
+                  content: const Text(
+                    'This app needs notification permission to show background service status. Please enable it in Settings > Notifications.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await openAppSettings();
+                      },
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+          );
+        }
+      }
+    }
   }
 }
 
@@ -356,6 +456,10 @@ class _MyAppState extends State<MyApp> {
                   text = isRunning ? 'Start Service' : 'Stop Service';
                 });
               },
+            ),
+            ElevatedButton(
+              child: const Text("Request Permissions"),
+              onPressed: () => checkAndRequestPermissions(context),
             ),
             const Expanded(child: LogView()),
           ],
